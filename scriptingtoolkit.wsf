@@ -1,0 +1,1138 @@
+<?xml version="1.0" encoding="ISO-8859-1" standalone="yes" ?>
+<package>
+
+<job id="ScriptingToolkit">
+<?job error="true" debug="true" ?>
+	<resource id="version">0.6.0</resource>
+	<comment>
+	'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+	'DC.Title:		Salesforce Scripting Toolkit
+	'
+	'DC.Description:	Wraper of the Ajax Toolkit to be used through the
+	'			command line. Used to develop batch interfaces
+	'			requiring business rules.
+	'			Source : https://www.salesforce.com/appexchange/detail_overview.jsp?id=a0330000002f62XAAQ
+	'
+	'DC.Contributor:	Jean-Luc Antoine, antoinejl at hotmail.com
+	'			Please do cite or let me know if you use this
+	'			program for your published paper.
+	'
+	' New in 0.6.0:	DeleteFromSOQL can remove more than 2k records
+	' New in 0.6.0:	prerelease parameter
+	' New in 0.6.0:	oAuth authentication by default
+	' New in 0.4.9:	ToolKit.metadataServerUrl
+	' New in 0.4.8:	API 13.0 usage, Apex Code execute() and executeAnonymous() available, new ToolKit.StringtoFileUTF8() method
+	' New in 0.4.7:	API 11.1 usage
+	' New in 0.4.6:	SOQL2CSV : null values management
+	' New in 0.4.5:	ini file management
+	'		end of compatibility with Ajax Beta3
+	'		including SOQL relationships in csv export
+	' New in 0.4.4:	Ajax v9 compatibility
+	''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+	</comment>
+	
+	<runtime>
+		<description>This script encapsulates Salesforce's AJAX Toolkit to provide a batch access to Salesforce</description>
+		<named name="user" helpstring="Authorized user for the API." type="string" many="false" required="false" />
+		<named name="pass" helpstring="User's password." type="string" many="false" required="false" />
+		<named name="sid" helpstring="session id, if no user/pass provided" type="string" many="false" required="false" />
+		<named name="server" helpstring="the server of your org (ex:na3.salesforce.com or na3-api.salesforce.com)" type="string" many="false" required="false" />
+		<named name="proxyserver" helpstring="hostname or IP of your proxy, and port (ex:proxy.internal.yourcompany.com:3128 or 192.168.0.7:3138)" type="string" many="false" required="false" />
+		<named name="proxyuser" helpstring="username if using a proxy with authentication" type="string" many="false" required="false" />
+		<named name="proxypass" helpstring="password if using a proxy with authentication" type="string" many="false" required="false" />
+		<named name="debug" helpstring="To dump on stderr some debug info" type="simple" many="false" required="false" />
+		<named name="sandbox" helpstring="To authenticate on test.salesforce.com" type="simple" many="false" required="false" />
+		<named name="prerel" helpstring="To authenticate on prerelna1.pre.salesforce.com" type="simple" many="false" required="false" />
+		<named name="client_id" helpstring="Consumer Key" type="string" many="false" required="false" />
+		<named name="client_secret" helpstring="Consumer Secret" type="string" many="false" required="false" />
+		<example>Examples :
+		cscript scriptingtoolkit.wsf /user:myself@mycompany.com /pass:secret
+		cscript scriptingtoolkit.wsf /debug /server:emea.salesforce.com /sid:Xabu.ZcSapOXihiaglMeP.....t1jqGWcvtGpYnKO9AsNCSeX5jsUoLXQ=
+		if no user/password and no server/sid, script tries to get an existing sid from an IE browsing session
+		using a proxy: cscript scriptingtoolkit.wsf /proxyserver:192.168.0.7:3128 /proxyuser:jla /proxypass:jla
+			Proxy error ? See "http://support.microsoft.com/kb/289481/en-us"
+		Compatibility test: "cscript scriptingtoolkit.wsf //Job:diagnose"
+		On Error, text is dumped to stdErr
+		</example>
+	</runtime>
+	<resource id="Err0">No error</resource>
+	<resource id="Err1">Unable to run query</resource>
+	<resource id="Err2">File not found</resource>
+	<resource id="Err3">No records matched.</resource>
+	<resource id="Err4">Too many records.</resource>
+	<resource id="Err5">You cannot run queries on this object.</resource>
+	<object id="oShell" progid="WScript.Shell"/>
+	<object id="fso" progid="Scripting.FileSystemObject"/>
+	<resource id="client_id">3MVG9A2kN3Bn17huybPDZzyv26a0UTpBDUfVY_QjcYA0okMBnX1fODB78VGoIxlT14pMn4QWVtjlJHENx2et7</resource>
+	<resource id="client_secret">5027091994086308390</resource>
+<script language="JScript"><![CDATA[
+
+//=========================================================
+// Utility function to retrieve the value of a cookie string
+//=========================================================
+function get_cookie(cookie,Name) {
+	var search = Name + "=";
+	var returnvalue = "";
+	if (cookie) {
+		offset = cookie.indexOf(search)
+		if (offset != -1) {	// if cookie exists
+			offset += search.length;	// set index of beginning of value
+			end = cookie.indexOf(";", offset);// set index of end of cookie value
+			if (end == -1) end = cookie.length;
+			returnvalue=unescape(cookie.substring(offset, end))
+		}
+	}
+	return returnvalue;
+}
+
+//==========================
+// Toolkit object definition
+//==========================
+ToolKit={};
+ToolKit.client_id=WScript.Arguments.Named.Exists("client_id")?WScript.Arguments.Named("client_id"):getResource("client_id");
+ToolKit.client_secret=WScript.Arguments.Named.Exists("client_secret")?WScript.Arguments.Named("client_secret"):getResource("client_secret");
+ToolKit.className = "ScriptingToolKit";
+ToolKit.User=WScript.Arguments.Named("user");
+ToolKit.Password=WScript.Arguments.Named("pass");
+ToolKit.Server=WScript.Arguments.Named("server");
+ToolKit.SID=WScript.Arguments.Named("sid");
+ToolKit.HasToExit=false;
+ToolKit._Debug=WScript.Arguments.Named.Exists("debug");
+ToolKit.ErrCode=0;
+ToolKit._ErrText="";
+ToolKit.StartTime=0;
+ToolKit.EndTime=0;
+ToolKit._TimeoutTodo=false;
+ToolKit._TimeoutNextTime=0;
+ToolKit._TimeoutCallBack="";
+ToolKit.Ini={};//Initialize the Ini class
+//=================
+// Clear error info
+//=================
+ToolKit.ClearError=function(){
+	this.ErrCode=0;
+	this._ErrText="";
+}
+
+//===============
+// Set error info
+//===============
+ToolKit.SetError=function(ec,et){
+	this.ErrCode=ec;
+	this._ErrText=et;
+}
+
+//==================
+// Get error details
+//==================
+ToolKit.ErrText=function(){
+	return getResource("Err"+this.ErrCode)+"\r\n"+this._ErrText;
+}
+
+
+//===================================
+// credential parameters verification
+//===================================
+//3 ways to login
+//should be passed : (user && pass) || (server & sid) || a running IE session
+ToolKit.VerifyLoginParameters=function(){
+	if(this.SID && this.Server){
+	}else if(!(this.User && this.Password)){
+		var discoveredSID=new Array();
+		var discoveredDomain=new Array();
+
+		var shApp = new ActiveXObject("Shell.Application");
+		var shWins = shApp.Windows();
+		for (i = 0; i < shWins.Count; i++){
+			ieApp = shWins.Item(i);
+			if(ieApp)if(ieApp.LocationURL){
+				if(ieApp.LocationURL.toLowerCase().indexOf("salesforce.com")>0){
+					if(get_cookie(ieApp.Document.cookie,"sid").length>0){
+						if( (discoveredSID.length==0) || discoveredSID[0]!=get_cookie(ieApp.Document.cookie,"sid")){
+							discoveredSID.push(get_cookie(ieApp.Document.cookie,"sid"));
+							discoveredDomain.push(ieApp.Document.domain);
+						}
+					}
+				}
+			}
+		}
+		if(discoveredSID.length!=1){	//If not one and only one SID
+			//enter credential interactively
+			WScript.StdOut.Write("Enter your login: ");
+			this.User=WScript.StdIn.ReadLine();
+			if(this.User!=""){
+				WScript.StdOut.Write("Enter your password: ");
+				try{
+					var oPass=new ActiveXObject("ScriptPW.Password");
+					this.Password=oPass.GetPassword() ;
+					WScript.echo();
+				}catch(e){
+					this.Password=WScript.StdIn.ReadLine();
+				}
+			}
+			if(this.User=="" || this.Password==""){
+				WScript.Arguments.ShowUsage();
+				WScript.quit(2);
+			}
+		}else{
+			this.Server=discoveredDomain[0];
+			this.SID=discoveredSID[0];
+		}
+	}
+}
+
+//==============
+// Toolkit Debug
+//==============
+// Writing to stdErr => no impact if you redirect stdout
+ToolKit.Debug=function(text){
+	if(this._Debug)WScript.StdErr.WriteLine(text);
+}
+
+//==============
+// Toolkit login
+//==============
+ToolKit.Login=function(){
+	var serverUrl=sforce.connection.serverUrl;
+	this.Debug(Date()+" begin call login");
+	this.metadataServerUrl="https://"+this.Server+"/services/Soap/m/28.0"
+	if(ToolKit.client_id!="" && ToolKit.client_secret!=""){
+		sforce.Connection.prototype.login = function (username, password) {
+			var o;
+			try{o=new ActiveXObject('Msxml2.XMLHTTP');	//new ActiveXObject('Msxml2.ServerXMLHTTP.4.0');//l'activeX server ne peut pas prendre implicitement le proxy
+			}catch(e){try{o=new ActiveXObject('Microsoft.XMLHTTP');}catch(e){o=new XMLHttpRequest();}}
+			if(WScript.Arguments.Named.Exists("proxyserver"))o.setProxy(2,WScript.Arguments.Named("proxyserver"),"");
+			o.open("POST",  "https://"+(WScript.Arguments.Named.Exists("sandbox")?"test":(WScript.Arguments.Named.Exists("prerel")?"prerelna1.pre":"login"))+'.salesforce.com/services/oauth2/token?grant_type=password&client_id='+ToolKit.client_id+'&client_secret='+ToolKit.client_secret+'&username='+username+'&password='+password, false);
+			if(WScript.Arguments.Named.Exists("proxyuser"))o.setProxyCredentials(WScript.Arguments.Named("proxyuser"),WScript.Arguments.Named("proxypass"));
+			o.setRequestHeader("Accept", "application/json");
+			o.setRequestHeader('User-Agent', 'Mozilla/4.0 (compatible; MSIE 6.0)');
+			o.send();
+			ToolKit.Debug(o.responseText);
+			var loginResult=null;
+
+			eval('loginResult='+o.responseText);
+			loginResult.getBoolean=function(name){return ("true"==this[name])};
+			if(typeof loginResult.error=='string'){
+				loginResult.faultcode=loginResult.error;
+				loginResult.faultstring=loginResult.error_description;
+				loginResult.className="Fault";
+			}else{
+				this.sessionId=loginResult.access_token;
+				var a=loginResult.id.split('/');
+				loginResult.userId=a[5];
+				loginResult.metadataServerUrl=loginResult.instance_url+"/services/Soap/m/28.0";
+				loginResult.serverUrl=loginResult.instance_url+"/services/Soap/u/28.0/"+a[4].substring(0,15);//a[4]=orgId
+				loginResult.passwordExpired="false";//###
+				loginResult.sessionId=loginResult.access_token;
+			}
+			return loginResult;
+		};
+	}
+	if(this.SID && this.Server){
+		this.Debug(Date()+" using SID "+this.SID);
+		sforce.connection.init(this.SID, "https://"+this.Server+serverUrl);//sessId, serverUrl
+		/*
+		var loginResult=sforce.connection.getUserInfo();
+		if(loginResult.faultcode=="sf:INVALID_SESSION_ID"){
+			WScript.StdErr.WriteLine("unable to connect. Either your session id is invalid, or your server name is unreachable or invalid");
+			WScript.StdErr.WriteLine("Server : "+this.Server);
+			WScript.StdErr.WriteLine("SID : "+this.SID);
+			WScript.quit(3);
+		}else{
+			this.Debug(loginResult);
+		}
+		*/
+	}else{
+		//sforce.connection.init(null, null, false);//sessId, serverUrl, useBuiltInLoginScreen
+		sforce.connection.init(null, "https://"+(WScript.Arguments.Named.Exists("sandbox")?"test":(WScript.Arguments.Named.Exists("prerel")?"prerelna1.pre":"login"))+".salesforce.com"+serverUrl);//sessId, serverUrl
+		try{
+			var loginResult=sforce.connection.login(this.User, this.Password);
+			sforce.connection.serverUrl=loginResult.serverUrl;//v9
+			this.metadataServerUrl=loginResult.metadataServerUrl;
+			if(loginResult.getBoolean('passwordExpired'))WScript.echo("==== Password Expired!!! ====");
+		}catch(e){
+			if(e.faultcode=='sf:ORG_LOCKED'){
+				WScript.StdErr.WriteLine ("The organization has been locked. You must contact salesforce.com to unlock the organization.");
+				WScript.quit(3);
+			}else if(e.faultcode=='sf:API_CURRENTLY_DISABLED'){
+				WScript.StdErr.WriteLine ("API is disabled for this User. You cannot use this console tool with this user.");
+				WScript.quit(3);
+			}else if(e.faultstring=='INVALID_LOGIN: Invalid username, user not active'){
+				WScript.StdErr.WriteLine ("Your access to salesforce.com has been disabled by your System Administrator. Please contact your Administrator for more information.");
+				WScript.quit(3);
+			}else if(!WScript.Arguments.Named.Exists("sandbox")){
+				sforce.connection.init(null, "https://test.salesforce.com"+serverUrl, false);//sessId, serverUrl, useBuiltInLoginScreen
+				var e1=e;
+				try{
+					var loginResult=sforce.connection.login(this.User, this.Password);
+					sforce.connection.serverUrl=loginResult.serverUrl;//v9
+					this.metadataServerUrl=loginResult.metadataServerUrl;
+					if(loginResult.getBoolean('passwordExpired'))WScript.echo("Password Expired!!!");
+				}catch(e){
+					if(e.faultcode=='sf:ORG_LOCKED'){
+						WScript.StdErr.WriteLine ("The sandbox organization has been locked. You must contact salesforce.com to unlock the organization.");
+					}else{
+						WScript.StdErr.WriteLine ("Unable to login (prod). Code="+e1.faultcode+"\r\n"+e1.faultstring+"\r\n"+e1.detail);	//loginResult.faultstring loginResult.faultcode
+						WScript.StdErr.WriteLine ("Unable to login (sandbox). Code="+e.faultcode+"\r\n"+e.faultstring+"\r\n"+e.detail);	//loginResult.faultstring loginResult.faultcode
+					}
+					WScript.quit(3);
+				}
+			}else{
+				WScript.StdErr.WriteLine ("Unable to login (sandbox). Code="+e.faultcode+"\r\n"+e.faultstring+"\r\n"+e.detail);	//loginResult.faultstring loginResult.faultcode
+				WScript.quit(3);
+			}
+		}
+		//this.Debug(loginResult);
+		if (loginResult)if(loginResult.className=="Fault"){	//"LoginResult"  Beta3 code
+			WScript.StdErr.WriteLine ("Unable to login\n"+loginResult.faultcode+"\n"+loginResult.faultstring);	//loginResult.faultstring loginResult.faultcode
+			WScript.quit(3);
+		}
+	}//sforce.connection.init("{!API_Session_ID}", "{!API_Partner_Server_URL_70}");
+	this.Debug(Date()+" end call login");
+}
+
+//=============
+// ToolKit Quit
+//=============
+ToolKit.Quit=function(){
+	this.HasToExit=true;
+}
+
+//==========
+// Main Loop
+//==========
+ToolKit.Main=function(){
+	this.Debug(Date()+" starting Main()");
+
+	var x;
+	while(!this.HasToExit){
+	//while(this._TimeoutCallBack){//v3.3
+		WScript.Sleep(10);
+		if(this._TimeoutTodo){	//our setTimeout emulated function
+			x=new Date().getTime();
+			if(x>=this._TimeoutNextTime){
+				this._TimeoutTodo=false;
+				this.Debug(Date()+" Callback "+(this._TimeoutCallBack==""?"cleared":this._TimeoutCallBack));
+				eval(this._TimeoutCallBack);
+			}
+		}
+	}
+	this.Debug(Date()+" end of Main()");
+}
+
+//=================================================
+// Utility : transform a CSV file to an array of arrays
+//=================================================
+//input : path : folder where the file can be found
+//input : file : the csv file without the path
+//output : an 2-dimension array, the first is the record, the second the field. Fields can be referenced by their name, taken from the column name
+ToolKit.CSV2Array=function(path,file){
+	var adOpenStatic = 3;
+	var adLockOptimistic = 3;
+	var adCmdText = 0x0001;
+	var objConnection = new ActiveXObject("ADODB.Connection");
+	var objRecordSet = new ActiveXObject("ADODB.Recordset");
+
+	//Provider=MSDASQL; Driver={Microsoft Text Driver (*.txt; *.csv)}; DBQ=C:\path\;
+	// Delimited columns:
+	//"Provider=Microsoft.Jet.OLEDB.4.0;Data Source=c:\txtFilesFolder\;Extended Properties=""text;HDR=Yes;FMT=Delimited""" 
+
+	objConnection.Open("Driver={Microsoft Text Driver (*.txt; *.csv)};Dbq="+path+";Extensions=asc,csv,tab,txt;Persist Security Info=False;");
+	objRecordSet.Open("SELECT * FROM "+file, objConnection, adOpenStatic, adLockOptimistic, adCmdText);
+
+	//Remember the header
+	var Header=new Array();
+	for(var x=0;x<objRecordSet.Fields.Count;x++){
+		Header.push(objRecordSet.Fields.Item(x).Name);
+	}
+	var ResultSet=new Array();
+	while(!objRecordSet.EOF){
+		var Record=new Array();
+		for(var x=0;x<Header.length;x++){
+			Record[Header[x]]=objRecordSet.Fields.Item(Header[x]).Value;
+		}
+		ResultSet.push(Record);
+		objRecordSet.MoveNext();
+	}
+	objRecordSet.Close();
+	objConnection.Close();
+	return ResultSet;
+}
+
+
+//=================================================
+// Utility : transform a SOQL query to a CSV string
+//=================================================
+ToolKit.SOQL2CSV=function(SOQL,Header,mySep,cr,strnull){
+	//Input :
+	//	SOQL : The query, compatible with relationships
+	//	Header : optional : the Columns to retrieve
+	//	mySep : optional : field separator
+	//	cr : optional : End of line (cariage return)
+	//	null : optional : string replacement for null values in the file
+	//Output :
+	//	null on error
+	//	CSV String if no error
+	//Output format : http://www.csvreader.com/csv_format.php
+	if(!cr)cr="\r\n";//End of line
+	var valeur,sep;
+	if(!mySep)mySep=",";
+	if(!strnull)strnull='""';//"null" or "" or '""'
+	this.ClearError();
+	try{
+		var queryResult = sforce.connection.query(SOQL);
+		if (queryResult.size > 0) {
+			if(!Header){
+				Header=new Array();
+				var record = queryResult.records[0];
+				for(field in record){
+					if((typeof record[field]!='function') && (field!='type')){
+						if(typeof(record[field])=='object'){//relationship
+							var obj=record[field];
+							for(field2 in obj){
+								if(typeof obj[field2]!='function'){
+									if((field2!='type') && !((field2=='Id')&&(obj[field2]==null))){
+										Header.push(field+field2);
+									}
+								}
+							}
+						}else{
+							Header.push(field);
+						}
+					}
+				}
+			}
+			var output=Header.join(mySep)+cr;
+			var queryMore = true;
+			while (queryMore) {
+				for (var i=0;i<queryResult.records.length;i++) {
+					sep="";
+					var record = queryResult.records[i];
+					for(field in record){
+						if((typeof record[field]!='function') && (field!='type')){
+							if(typeof record[field]=='object'){//relationship
+								var obj=record[field];
+
+								if((obj===null) && (field!='Id')){//If null value in relationship (attention, si plusieurs champs de la relationship alors ligne inconsistante car une seule valeur nulle est écrite)
+									output+=sep+strnull;
+								}else{
+
+									for(field2 in obj){
+										if(typeof obj[field2]!='function'){
+											if((field2!='type') && !((field2=='Id')&&(obj[field2]==null))){
+												valeur=obj[field2];//Ids can be retrieved without a relationship
+												if(valeur===null){
+													output+=sep+strnull;
+												}else{
+													output+=sep+'"'+valeur.replace('"','""')+'"';
+												}
+												sep=mySep;
+											}
+										}
+									}
+								}
+							}else{//direct field
+								valeur=record[field];
+								if(valeur===null){
+									output+=sep+strnull;
+								}else{
+									output+=sep+'"'+valeur.replace('"','""')+'"';
+								}
+								sep=mySep;
+							}
+						}//if
+					}//for
+
+					output+=cr;
+				}//for
+				if(queryResult.getBoolean("done")){
+						queryMore = false;
+				} else {
+						queryResult = sforce.connection.queryMore(queryResult.queryLocator);
+						this.Debug(Date()+" query more...");
+				}
+			}//while
+
+			return output;
+		}else{	//No records matched.
+			return Header.join(mySep)+cr;
+		}
+	}catch(e){
+		this.SetError(1,e.toString());
+		return null;
+	}
+}
+
+
+//===================================
+// Utility : Mass Insert from an Array
+//===================================
+//input : sObject : the name of the Salesforce object
+//input : theArray, an array the same than CSV2Array() result.
+//input : size : optional : the amount records per Ajaxcall
+//output : true on success, false on error
+ToolKit.InsertFromArray=function (sObject,theArray,size){
+	var maxRecordSet=200;
+	if(size>0)maxRecordSet=size;
+	this.ClearError();
+	try{
+		var records = [];
+		this.Debug(theArray.length+" records to be inserted");
+		for(var x=0;x<theArray.length;x++){
+			var record = new sforce.SObject(sObject);
+			for(var i in theArray[x])record[i]=theArray[x][i];
+			records.push(record)
+			if( ((x % maxRecordSet)==(maxRecordSet-1)) || (x==(theArray.length-1)) ){
+				var result = sforce.connection.create(records);
+
+				if(this._Debug){
+					for (var i=0; i<result.length; i++) {
+						if (result[i].getBoolean("success")) {
+							this.Debug("new record created with id " + result[i].id);
+						} else {
+							throw("failed to create record " + result[i]);
+						}
+					}
+				}
+
+				var records=new Array();
+			}
+		}//for
+
+		return true;
+	}catch(e){
+		this.SetError(1,e.toString());
+		return false;
+	}
+}
+
+//===================================
+// Utility : Delete records based on a SOQL
+//===================================
+//input : a SOQL query selecting Id(s)
+//input : size : optional : maximum ids per Ajax call
+//output : true on success, false on error
+ToolKit.DeleteFromSOQL=function (SOQL,size){
+	var maxRecordSet=200;
+	if(size>0)maxRecordSet=size;
+	var ids=new Array();
+	this.ClearError();
+	try{
+		var result = sforce.connection.query(SOQL);
+		var queryMore = true;
+		while (queryMore) {
+			var records = result.getArray("records");
+			this.Debug("records to be deleted : "+records.length);
+			for (var x=0; x<records.length; x++) {
+				var record = records[x];
+				if(record.Id==null) throw("Your SOQL should select the column Id");
+				ids.push(record.Id);
+				if( ((x % maxRecordSet)==(maxRecordSet-1))  || (x==(records.length-1)) ){
+					var delResult = sforce.connection.deleteIds(ids);
+					for (var i=0; i<delResult.length; i++) {
+						if (delResult[i].getBoolean("success")) {
+							this.Debug("id " + delResult[i].id+" deleted");
+						} else {
+							throw("failed to delete " + delResult[i]);
+						}
+					}
+					var ids=new Array();
+				}
+			}//for
+			if(result.getBoolean("done")){
+				queryMore = false;
+			} else {
+				result = sforce.connection.queryMore(result.queryLocator);
+				this.Debug(Date()+" query more...");
+			}
+		}
+		return true;
+	}catch(e){
+		this.SetError(1,e.toString());
+		return false;
+	}
+}
+
+
+//===================================
+// Utility : Build an Oracle SQL statement to create a table based on sObject definition
+//===================================
+//input : name of the sobject
+//output : null on error, else the SQL query to create the Oracle table
+ToolKit.sObject2OracleCreateTable=function(sObjectName){
+	var unique;
+	this.ClearError();
+	this.Debug("Converting "+sObjectName+" to SQL : create table");
+	try{
+		var describeResult=sforce.connection.describeSObject(sObjectName);
+	}catch(e){
+		this.SetError(1,"Unable to describe "+sObjectName+"\r\n"+e.toString());
+		return null;
+	}
+	var props=["activateable","createable","deletable","custom","keyPrefix","label","labelPlural","layoutable","mergeable","name","queryable","replicateable","retrieveable","searchable","undeletable","updateable","urlDetail","urlEdit","urlNew"];
+	for(x=0;x<props.length;x++){
+		this.Debug(props[x]+"="+describeResult[props[x]]);
+	}
+	if(describeResult['queryable']=='true'){
+		var dbFields=new Array();
+		for(recordNumber in describeResult.fields){
+			if(describeResult.fields[recordNumber].unique=='true'){
+				unique=' unique';
+			}else{
+				unique='';
+			}
+			this.Debug("Field "+recordNumber+":"+describeResult.fields[recordNumber].name+" ("+describeResult.fields[recordNumber].label+")");
+
+			switch(describeResult.fields[recordNumber].type){//.soapType
+			case "boolean"://Checkbox,soapType=xsd:boolean
+				dbFields.push(describeResult.fields[recordNumber].name+" CHAR check ("+describeResult.fields[recordNumber].name+" in (0,1))");
+				break;
+			case "reference"://Lookup Relationship soapType=tns:ID,length=18,byteLength=18
+			case "id"://byteLength=18,soapType=tns:ID,length=18
+				dbFields.push(describeResult.fields[recordNumber].name+" CHAR(18)"+(describeResult.fields[recordNumber].name=="Id"?" primary key":""));
+				break;
+			case "phone"://Length=40, byteLength=120,digits=0,soapType=xsd:string
+			case "url"://soapType=xsd:string,bytelength=765,length=255
+			case "email"://byteLength=240,length=80,soapType=xsd:string
+			case "string"://limited to 255. length=100,byteLength=300,soapType=xsd:string; Text(10) => soapType=xsd:string,lenght=10,bytelength=30
+			case "picklist"://length=255,byteLength=765, type=picklist, soapType=xsd:string	//CurrencyIsoCode length=3,byteLength=9, restrictedPicklist=true
+				dbFields.push(describeResult.fields[recordNumber].name+" VARCHAR2("+describeResult.fields[recordNumber].length+")"+unique);
+				break;
+			case "textarea"://bytelength=32000,length=32000,soapType=xsd:string
+			case "multipicklist"://length=4099, byteLength=4099,digits=0,soapType=xsd:string =>varchar2 is limited to 4000
+				dbFields.push(describeResult.fields[recordNumber].name+" CLOB");
+				break;
+			case "datetime"://soapType=xsd:dateTime,scale=0,precision=0,length=0,digits=0,byteLength=0
+				dbFields.push(describeResult.fields[recordNumber].name+" TIMESTAMP");//WITH LOCAL TIME ZONE
+				break;
+			case "percent"://Percent(16, 2) =>precision=18,scale=2,soapType=xsd:double
+			case "double"://Number(3, 0) =>precision=3,scale=0,soapType=xsd:double ; Number(3, 10)=>precision=13,scale=10
+			case "currency"://Currency(12, 2) =>type=currency, soapType=xsd:double, scale=2, precision=14, digits=0, length=0,byteLength=0
+				dbFields.push(describeResult.fields[recordNumber].name+" NUMBER("+(describeResult.fields[recordNumber].precision-describeResult.fields[recordNumber].scale)+","+describeResult.fields[recordNumber].scale+")");
+				break;
+			case "date":
+				dbFields.push(describeResult.fields[recordNumber].name+" DATE");
+				break;
+			case "int"://soapType=xsd:int,scale=0,precision=0,digits=8 => Number(8,0)
+				dbFields.push(describeResult.fields[recordNumber].name+" NUMBER("+describeResult.fields[recordNumber].digits+",0)");
+				break;
+			case "base64"://soapType=xsd:base64Binary => stored as binary data
+				dbFields.push(describeResult.fields[recordNumber].name+" BLOB");
+				break;
+			default:
+				for(columns in describeResult.fields[recordNumber]){
+					if(typeof(describeResult.fields[recordNumber][columns])!='function')
+						this.Debug(columns+"="+describeResult.fields[recordNumber][columns]);
+				}
+			}
+		}//for recordNumber
+		return ("CREATE TABLE "+sObjectName+" ("+dbFields.join(",")+");");
+	}else{
+		this.SetError(5,sObjectName + " not queryable");
+		return null;
+	}
+}
+
+//===================================
+// Utility : write a string to a file
+//===================================
+ToolKit.StringtoFile = function(str,filename){
+	if (!fso.FileExists(filename)) fso.CreateTextFile(filename);
+	var f = fso.GetFile(filename).OpenAsTextStream(ForWriting, true);
+	f.Write(str);
+	f.Close();
+}
+//===================================
+// Utility : write a string to a file using UTF-8
+//===================================
+ToolKit.StringtoFileUTF8 = function(str,filename){
+	var adSaveCreateOverWrite=2;
+	var stm=new ActiveXObject("ADODB.stream");
+	stm.Charset="UTF-8";
+	stm.Open();
+	stm.WriteText(str);
+	stm.SaveToFile(filename,adSaveCreateOverWrite);
+	stm.Close();
+}
+
+//==================================
+// Utility : read a file to a string
+//==================================
+// Should be used for files lighter than 1 Mb
+ToolKit.FileToString=function(filename,unicode) {
+	//ex : chaine=FileToString("test.csv",true);WScript.echo(chaine);
+	var s="";
+	this.ClearError();
+	if (fso.FileExists(filename)) {
+		var f = fso.OpenTextFile(filename,ForReading,false,unicode);
+		//var f = fso.GetFile(filename).OpenAsTextStream(ForReading, false);
+		s = f.ReadAll();
+		f.Close();
+	}else{
+		this.SetError(2,filename);
+	}
+	return(s);
+}
+
+
+//=========================
+// Utility : Start/StopTime
+//=========================
+ToolKit.StartTimer= function(){
+	this.StartTime=new Date().getTime();
+}
+ToolKit.StopTimer= function(){
+	this.EndTime=new Date().getTime();
+}
+ToolKit.TimeDiff=function(){//in milliseconds
+	return (this.EndTime-this.StartTime);
+}
+
+//========================
+// Utility : send an email
+//========================
+// using default CDO configuration, see diagnose
+// the body can be either text or html
+ToolKit.SendMail=function(from,to,subject,body){
+	try{
+		var msg = new ActiveXObject("CDO.Message");
+		msg.From = from;
+		msg.To = to;
+		msg.Subject = subject;
+		if(body.toString().toLowerCase().indexOf('<'+'br')||body.toString().toLowerCase().indexOf('<'+'/body')){
+			msg.HTMLBody = body;
+		}else{
+			msg.TextBody = body;
+		}
+		msg.Send();
+		return true;
+	} catch(e) {
+		this.Debug(Date()+" Err "+e.number+" : Unable to send email : "+e.message);//description
+		return false;
+	}
+}
+
+//=========================================
+// Utility : Retrieve a file and save local
+//=========================================
+ToolKit.GetFile=function (SOQL_id,filename){//"Select Body from Document where Id='015300000000CJuAAM'"
+	//Used for Documents and Attachments
+	//input :
+	//	SOQL_id should return 1 record only
+	//output :
+	//	null if error
+	//	true if success
+	this.ClearError();
+	try{
+	var queryResult = sforce.connection.query(SOQL_id);
+	if (queryResult.className == "Fault") {
+		this.SetError(1,queryResult.toString());
+		return null;
+	} else {
+			switch (queryResult.size){
+			case '0':
+				this.SetError(3,SOQL_id);
+				return null;
+				break;
+			case '1':
+				var xml_dom = new ActiveXObject("MSXML2.DOMDocument");
+				xml_dom.validateOnParse = false;//increase speed
+				var ado_stream = new ActiveXObject("ADODB.Stream");
+				var tmpNode = xml_dom.createElement("tmpNode");
+				tmpNode.dataType = "bin.base64";
+				tmpNode.text = queryResult.records.Body;
+				ado_stream.Charset = "gb2312";
+				ado_stream.Type = adTypeBinary;
+				ado_stream.Open();
+				ado_stream.Write(tmpNode.nodeTypedValue);
+				ado_stream.SaveToFile(filename,adSaveCreateOverWrite);
+				ado_stream.Close();
+				return true;
+				break;
+			default:
+				this.SetError(4,"The SOQL should return only 1 record. It returns "+queryResult.size+" records ("+SOQL_id+")");
+				return null;
+				break;
+			}//switch
+		}
+	}catch(e){
+		this.SetError(1,e.toString());
+		return null;
+	}
+}
+
+//===========================
+//Preventing the double-click
+//===========================
+ToolKit.Debug(Date()+" Starting "+WScript.fullName);
+if(!(/cscript.exe$/i).test(WScript.FullName)){
+	WScript.echo("This script has to be run from the command line");
+	WScript.quit(1);
+}
+
+//============================================
+// Ajax Toolkit wrapers to emulate the browser
+//============================================
+window=function(){
+	this.className = "MyEmulatedwindow";
+}
+window.ActiveXObject=true;
+window.setTimeout=function(callback,timer){//time in milliseconds
+	ToolKit._TimeoutNextTime = new Date().getTime()+timer;
+	ToolKit._TimeoutCallBack=callback;
+	ToolKit._TimeoutTodo=true;
+}
+var document;
+navigator=function(){
+	this.className = "MyEmulatedNavigator";
+}
+navigator.userAgent="Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1; SV1; .NET CLR 1.1.4322)";
+
+sforce={}
+//====================
+// Scripting constants
+//====================
+var ForReading=1;
+var ForWriting=2;
+var ForAppending=8;
+var adTypeBinary = 1;
+var adSaveCreateOverWrite = 2;
+var cdoSendUsingMethod="http://schemas.microsoft.com/cdo/configuration/sendusing";
+var cdoSendUsingPort=2
+var cdoSMTPServer="http://schemas.microsoft.com/cdo/configuration/smtpserver";
+var cdoSMTPServerPort="http://schemas.microsoft.com/cdo/configuration/smtpserverport";
+var cdoSMTPConnectionTimeout="http://schemas.microsoft.com/cdo/configuration/smtpconnectiontimeout";
+var cdoSMTPAuthenticate="http://schemas.microsoft.com/cdo/configuration/smtpauthenticate";
+var cdoAnonymous=0;
+var cdoBasic=1;
+var cdoNTLM=2;//for a network mail server
+var cdoSendUserName="http://schemas.microsoft.com/cdo/configuration/sendusername";
+var cdoSendPassword="http://schemas.microsoft.com/cdo/configuration/sendpassword";
+var cdoURLGetLatestVersion="http://schemas.microsoft.com/cdo/configuration/urlgetlatestversion";
+
+]]></script>
+	<script language="vbscript"><![CDATA[
+Class Ini	'from http://www.interclasse.com/scripts/class_ini.php
+	Private fso,f
+
+	Public Filename	'Path to the ini File
+	Public Section	'[section]
+	Public Key	'Key=Value
+	Public Default	'Return it when an error occurs
+
+	Private Sub Class_Initialize   ' Setup Initialize event.
+		Default=""
+		Set fso=CreateObject("Scripting.FileSystemObject")
+	End Sub
+	Private Sub Class_Terminate   ' Setup Terminate event.
+		Set fso=Nothing
+	End Sub
+
+	Property Get Content()
+		'All the file in a string
+		If fso.FileExists(FileName) Then
+			Set f=fso.OpenTextFile(FileName,1)
+			Content=f.ReadAll
+			f.close
+			Set f=Nothing
+		Else
+			Content=""
+		End If
+	End Property
+	Property Let Content(sContent)
+		'Create a brand new ini file
+		Set f=fso.CreateTextFile(FileName,True)
+		f.Write sContent
+		f.close
+		Set f=Nothing
+	End Property
+
+	Property Get ContentArray()
+		'All the file in an array of lines
+		ContentArray=Split(Content,vbCrLf,-1,1)
+	End Property
+
+	Private Sub FindSection(ByRef StartLine, ByRef EndLine)
+		Dim x,A,s
+		StartLine=-1
+		EndLine=-2
+		A=ContentArray
+		For x=0 To UBound(A)
+			s=UCase(Trim(A(x)))
+			If s="[" & UCase(section) & "]" Then
+				StartLine=x
+			Else
+				If (Left(s,1)="[") And (Right(s,1)="]") Then
+					If StartLine>=0 Then
+						EndLine=x-1
+						If EndLine>0 Then 'A Space before the next section ?
+							If Trim(A(EndLine))="" Then EndLine=EndLine-1
+						End If
+						Exit Sub
+					End If
+				End If
+			End If
+		Next
+		If (StartLine>=0) And (EndLine<0) Then EndLine=UBound(A)
+	End Sub
+
+	Property Get Value()
+		'Retrieve the value for the current key in the current section
+		Dim x,i,j,A,s
+		FindSection i,j
+		A=ContentArray
+		Value=Default
+		'Search only in the good section
+		For x=i+1 To j
+			s=Trim(A(x))
+			If UCase(Left(s,Len(Key)))=UCase(Key) Then
+				Select Case Mid(s,Len(Key)+1,1)
+				Case "="
+					Value=Trim(Mid(s,Len(Key)+2))
+					Exit Property
+				Case " ",chr(9)
+					x=Instr(Len(Key),s,"=")
+					Value=Trim(Mid(s,x+1))
+					Exit Property
+				End Select
+			End If
+		Next
+	End Property
+	Property Let Value(sValue)
+		' Write the value for a key in a section
+		Dim i,j,A,x,s,f
+		FindSection i,j
+		If i<0 Then 'Session doesn't exist
+			Content=Content & vbCrLf & "[" & section & "]" & vbCrLf & Key & "=" & sValue
+		Else
+			A=ContentArray
+			f=-1
+			'Search for the key, either the key exists or not
+			For x=i+1 To j
+				s=Trim(A(x))
+				If UCase(Left(s,Len(Key)))=UCase(Key) Then
+					Select Case Mid(s,Len(Key)+1,1)
+					Case " ",chr(9),"="
+						f=x	'Key found
+						A(x)=Key & "=" & sValue
+					End Select
+				End If
+			Next
+			If f=-1 Then
+				'Not found, add it at the end of the section
+				Redim Preserve A(UBound(A)+1)
+				For x=UBound(A) To j+2 Step -1
+					A(x)=A(x-1)
+				Next
+				A(j+1)=Key & "=" & sValue
+			End If
+			'Define the content
+			s=""
+			For x=0 To UBound(A)	
+				s=s & A(x) & vbCrLf
+			Next
+			'Suppress the last CRLF
+			If Right(s,2)=vbCrLf Then s=Left(s,Len(s)-2)
+			Content=s	'Write it
+		End If
+	End Property
+End Class
+set ToolKit.Ini=new ini	'A way to reference vbscript code in javascript
+
+'Utility function to convert a javascript string into UTF8
+Function UTF8(s)	'##Can still be improved for performance
+	Dim i,r,b1
+	r=""
+	For i=1 to Len(s)
+		c=AscW(Mid(s,i,1))
+		If c<128 and c>=0 Then
+			r=r+chr(c)
+		ElseIf c<2048 and c>=0 Then
+			b1=c Mod 64
+			r=r+chr(&hc0 + (c-b1)/64) & chr(128+ b1)
+		ElseIf c<65536 Then
+			b1=c Mod 64
+			r=r+chr(&he0 + (c-b1-(64*b2))/4096) & chr(&h80 + ((c-b1)/64) Mod 64) & chr(128+ b1)
+		End If
+	Next
+	UTF8=r
+End Function
+
+'usage in javascript :
+'ToolKit.Ini.Filename="cfg.ini";
+'ToolKit.Ini.Section="config";
+'ToolKit.Ini.Key="LastRun";
+'WScript.echo("LastRun was : "+ToolKit.Ini.Value);
+'ToolKit.Ini.Value=parseInt((today-0)/(1000*60*60*24));//day value
+
+]]></script>
+<script language="JScript" src="connection.js"/>
+<script language="JScript"><![CDATA[
+if(WScript.Arguments.Named.Exists("proxyserver")){//If using a proxy, Self-modified code to add proxy-usage capability
+	sforce.Transport=sforce.Transport.toString().replace("Msxml2.XMLHTTP","Msxml2.ServerXMLHTTP.4.0");//Using an ActiveX able to use a proxy, NOT relying on WinInet (on a subset : WinHTTP)
+	//## après le open faire SetOption(2, 13056) s'il y a des pb de certificat, mais pb, pas supporté par Msxml2.ServerXMLHTTP.4.0 mais par Msxml2.XMLHTTP.4.0
+	//
+	//	var SXH_OPTION_IGNORE_SERVER_SSL_CERT_ERROR_FLAGS = 2;
+	//	var SXH_SERVER_CERT_IGNORE_ALL_SERVER_ERRORS = 13056;
+	//	oXmlHttp.open("POST", url);
+	//	oXmlHttp.setOption(SXH_OPTION_IGNORE_SERVER_SSL_CERT_ERROR_FLAGS,SXH_SERVER_CERT_IGNORE_ALL_SERVER_ERRORS);
+	//	oXmlHttp.setTimeouts(30000, 30000, 30000, 90000);
+
+	sforce.Transport=sforce.Transport.toString().replace('this.connection.open("POST", this.url, async);','this.connection.setProxy(2,"'+WScript.Arguments.Named("proxyserver")+'","");this.connection.open("POST", this.url, async);');//Defining the proxy address
+	if(WScript.Arguments.Named.Exists("proxyuser"))
+		sforce.Transport=sforce.Transport.toString().replace('this.connection.open("POST", this.url, async);','this.connection.open("POST", this.url, async);this.connection.setProxyCredentials(WScript.Arguments.Named("proxyuser"),WScript.Arguments.Named("proxypass"));');
+	eval("sforce.Transport="+sforce.Transport);
+}
+
+ToolKit.VerifyLoginParameters();
+ToolKit.Login();
+
+//======== This part is adapted from Salesforce "apex.js" code ==========
+if (!sforce) {
+    throw "unable to find sforce. Make sure that connection.js is loaded before apex.js script";
+}
+
+sforce.Apex = function(){
+};
+
+
+sforce.RunTestsRequest = function() {
+};
+
+sforce.RunTestsRequest.prototype = new sforce.Xml("RunTestsRequest");
+
+sforce.Apex.prototype.namespaceMap = [{ns:"http://soap.sforce.com/2006/08/apex", prefix:""}];
+
+sforce.Apex.prototype.executeAnonymous = function (string, callback) {
+    var arg1 = new sforce.internal.Parameter("String", string, false);
+
+    return sforce.connection._invoke("executeAnonymous",[arg1], false,
+            callback, this.namespaceMap,ToolKit.metadataServerUrl, this.namespaceMap[0].ns); //changed
+};
+
+sforce.Apex.prototype.setDebug = function (flag, level) {
+    if (flag) {
+        sforce.debug.apexTrace = true;
+        sforce.connection.debuggingHeader = {debugLevel : (level ? level : "Db")};
+    } else {
+        sforce.debug.apexTrace = false;
+        sforce.connection.debuggingHeader = null;
+    }
+};
+
+sforce.Apex.prototype.execute = function (pkg, method, args, callback, isArray) {
+    pkg = pkg.replace(/\./g, "/");
+
+    var sobjectNs = "http://soap.sforce.com/schemas/package/" + pkg;
+    var nsmap = [{ns:sobjectNs, prefix:""}];
+
+    if (!args) {
+        throw "args not specified";
+    }
+
+    var params = [];
+    for (var field in args) {
+        var value = args[field];
+        var arrayParam = value === null ? false : (value.push?true:false);
+        var param = new sforce.internal.Parameter(field, value, arrayParam);
+        params.push(param);
+    }
+
+    var isRealArray = true;
+
+    if (isArray === false) {
+        isRealArray = false;
+    }
+
+    return sforce.connection._invoke(method, params, isRealArray, callback, nsmap,
+            sforce.connection.serverUrl.substr(0,sforce.connection.serverUrl.indexOf('/',10))+"/services/Soap/package/" + pkg, sobjectNs, sobjectNs);//changed
+};
+
+sforce.Apex.prototype.runTests = function (request, callback) {
+    var arg1 = new sforce.internal.Parameter("RunTestsRequest", request, false);
+
+    return sforce.connection._invoke("runTests",[arg1], false,
+            callback, this.namespaceMap, ToolKit.metadataServerUrl, this.namespaceMap[0].ns);//changed
+};
+
+sforce.apex = new sforce.Apex();
+//======== End of "apex.js" =============
+
+
+ToolKit.Debug(Date()+" running your script");
+
+]]></script>
+<script language="JScript" src="myscript.js"/>
+<script language="JScript">ToolKit.Main();</script>
+</job>
+
+<job id="diagnose">
+<object id="fso" progid="Scripting.FileSystemObject"/>
+<script language="JScript"><![CDATA[
+//cscript //nologo scriptingtoolkit.wsf //Job:diagnose
+WScript.echo("Configuration analysis\r\n======================");
+WScript.echo(WScript.Name+" "+WScript.Version+" build "+WScript.BuildVersion);
+var test;
+var x;
+
+if(typeof(fso)=="object"){
+	WScript.echo("FileSystem access OK : you can use fso object.");
+}else{
+	WScript.echo("FileSystem access KO : you CANNOT use fso object. (ToolKit.StringtoFile() and ToolKit.FileToString())");
+}
+
+WScript.echo("Checking XML http object");
+try {
+	test = new ActiveXObject('Msxml2.ServerXMLHTTP.4.0');
+	WScript.echo("OK : able to use a proxy");
+} catch(e) {
+	try {
+		test = new ActiveXObject('Microsoft.XMLHTTP');
+		WScript.echo("KO : Microsoft.XMLHTTP is an object that you cannot use through a proxy\r\nIt is OK if you are not using a proxy.");
+	} catch(e) {
+		WScript.echo("KO : No XML object was found, unable to use the API");
+		this.connection = new XMLHttpRequest();
+	} finally {
+		WScript.echo("     If using a proxy, download Microsoft XML Parser (MSXML) 3.0");
+		WScript.echo("http://www.microsoft.com/downloads/details.aspx?familyid=3144B72B-B4F2-46DA-B4B6-C5D7485F2B42&displaylang=en");
+	}
+}
+
+WScript.echo("Checking MSXML2.DOMDocument");
+try {
+	test=new ActiveXObject("MSXML2.DOMDocument");
+	WScript.echo("OK");
+} catch(e) {
+	WScript.echo("KO : you will not be able to use ToolKit.GetFile() to retrieve documents and attachments.");
+}
+WScript.echo("Checking ADODB.Stream");
+try {
+	test=new ActiveXObject("ADODB.Stream");
+	WScript.echo("OK");
+} catch(e) {
+	WScript.echo("KO : you will not be able to use ToolKit.GetFile() to retrieve documents and attachments.");
+}
+
+WScript.echo("Checking email capability");
+try {
+	test=new ActiveXObject("CDO.Configuration");
+	WScript.echo("OK, configuration :");
+
+	for(x=0;x<test.Fields.Count;x++){
+		if(test.Fields.Item(x).Attributes){
+			WScript.echo(test.Fields.Item(x).Name+"="+test.Fields.Item(x).Value);
+		}else{
+			WScript.echo(test.Fields.Item(x).Name+"=<cannot read this value>");
+		}
+	}
+	WScript.echo("(configured in HKEY_CURRENT_USER\Software\Microsoft\Internet Account Manager\Accounts)");
+} catch(e) {
+	WScript.echo("KO : you will not be able to use ToolKit.SendMail()");
+	WScript.echo("How to install cdo : http://j-integra.intrinsyc.com/support/kb/article.aspx?id=113792");
+	WScript.echo("http://www.microsoft.com/downloads/details.aspx?FamilyID=e17e7f31-079a-43a9-bff2-0a110307611e&DisplayLang=en");
+	WScript.echo("http://www.microsoft.com/downloads/details.aspx?FamilyID=2714320d-c997-4de1-986f-24f081725d36&displaylang=en");
+}
+
+]]></script>
+</job>
+</package>
