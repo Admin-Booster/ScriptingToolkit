@@ -1,3 +1,7 @@
+/*
+This is a sample file. You are free to put any code, any content, any logic in this file...
+The filename must remain "myscript.js" to be called by the Scripting Toolkit engine
+*/
 function Results(queryResult) {
     if (queryResult.size > 0) {
         var output = "";
