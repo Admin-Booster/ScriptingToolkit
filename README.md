@@ -1,6 +1,7 @@
 # ScriptingToolkit
 
-Detailed information on [Scripting Toolkit][Scripting Toolkit] documentation page
+Detailed information on [Scripting Toolkit][Scripting Toolkit] documentation page.
+Do not forget to place [connection.js][connection.js] file in the same folder
 
 ## Contributing workflow
 
@@ -18,6 +19,7 @@ by automatically forking the project and prompting to send a pull request too.
 [branch]: https://help.github.com/articles/creating-and-deleting-branches-within-your-repository
 [pr]: https://help.github.com/articles/using-pull-requests/
 [Scripting Toolkit]: https://www.adminbooster.com/tool/scripting-toolkit
+[connection.js]: https://na10.salesforce.com/soap/ajax/28.0/connection.js
 
 ## License
 
